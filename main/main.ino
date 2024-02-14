@@ -9,8 +9,8 @@
 #include "EEPROM.h"
 
 // Pump Switch Pin
-const int PumpSwitch = 0; // need to decide pin
-pinMode(PumpSwitch, INPUT); 
+const int PUMP_SWITCH = 14; 
+
 int SwitchState = 0;
 
 //Encoder setup
@@ -49,8 +49,16 @@ Adafruit_SH1107 display = Adafruit_SH1107(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OL
 HX711 scale;
 
 //Timer
-long ShotTimer = 0;
+float ShotTimer = 0.0;
+float InitialVal = 0;
 
+//Boiler
+
+const int BOILER_PIN = 26;
+
+//Pump
+
+const int PUMP_PIN = 27;
 
 void setup() {
   // put your setup code here, to run once:
@@ -58,17 +66,23 @@ void setup() {
   SetupScreen();
   SetupSensors();
   SetupEncoder();
+  //Set the group head switch 
+  pinMode(PUMP_SWITCH, INPUT_PULLUP); 
+  attachInterrupt(digitalPinToInterrupt(PUMP_SWITCH),PumpOnOrOff,CHANGE);
+  ///testing relays for boiler and pump /// Boiler pin 27; Pump pin 26
 
-  
+pinMode(PUMP_PIN, OUTPUT);
+pinMode(BOILER_PIN, OUTPUT);
+
+///
 
 }
 
 void loop() {
   
-   //Serial.print("Ratio = "); Serial.println(ratio,8);
-  //Serial.print("Resistance = "); Serial.println(RREF*ratio,8);
-  //Serial.print("Temperature = "); Serial.println(thermo.temperature(RNOMINAL, RREF));
-
+   Serial.println(digitalRead(PUMP_SWITCH)); 
+    
+  ////
   display.clearDisplay();
   display.setTextSize(1.5);
   display.setTextColor(SH110X_WHITE);
@@ -77,6 +91,10 @@ void loop() {
   DisplayTemp();
   //PRESSURE
     display.print("PSI = "); display.println((int)((ad7830.readADCsingle(0)-41)*.6444444));
+   //SHOTTIMER
+  StartTimer();
+  DisplayTime();
+  
   //SCALE
   if(scale.is_ready())
   {
@@ -89,7 +107,7 @@ void loop() {
   display.display();
   delay(1000);
 
-
+ 
 
 
 }
@@ -152,19 +170,29 @@ void DisplayTemp(){
 void DisplayTime()
 {
   display.print("Shot Time = ");
-  display.println((long)((SHOTTIMER));
+  display.println((float)(ShotTimer));
 
 }
 
 void StartTimer()
+{ 
+  if(SwitchState == HIGH){
+    if(InitialVal == 0){InitialVal = micros();}
+    ShotTimer = (micros() - InitialVal)/1000000.; 
+  } else{
+    InitialVal = 0;
+    ShotTimer = 0; 
+  }
+}
+
+void PumpOnOrOff()
 {
-  long InitialVal = millis();
-  if(SwitchState == 1)
-  {
-   ShotTimer = millis() - InitialVal; 
-    
+  SwitchState = digitalRead(PUMP_SWITCH);
+   if(SwitchState == HIGH){
+   digitalWrite(PUMP_PIN, LOW);
+  }else{
+   digitalWrite(PUMP_PIN, HIGH);
   }
-  else{
-    ShotTimer = 0;
-  }
+  
+ 
 }
