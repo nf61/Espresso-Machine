@@ -10,13 +10,15 @@
 
 // Pump Switch Pin
 const int PUMP_SWITCH = 14; 
-
-int SwitchState = 0;
+int SwitchState = 1;
 
 //Encoder setup
 ESP32Encoder encoder;
-const int clk = 25;
-const int dt = 33;
+const int CLK = 25;
+const int DT = 33;
+const int SW = 32;
+int encoderButtonState = 0;
+
 
 // Instantiate eeprom to store temp variable so it remembers what the last temp was set at
 EEPROMClass  TEMPS("eeprom0");
@@ -49,16 +51,17 @@ Adafruit_SH1107 display = Adafruit_SH1107(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OL
 HX711 scale;
 
 //Timer
-float ShotTimer = 0.0;
-float InitialVal = 0;
+double ShotTimer = 0.0;
+double InitialVal = 0;
 
 //Boiler
 
-const int BOILER_PIN = 26;
+const int BOILER_PIN = 27;
 
 //Pump
 
-const int PUMP_PIN = 27;
+const int PUMP_PIN = 26;
+
 
 void setup() {
   // put your setup code here, to run once:
@@ -70,9 +73,9 @@ void setup() {
   pinMode(PUMP_SWITCH, INPUT_PULLUP); 
   attachInterrupt(digitalPinToInterrupt(PUMP_SWITCH),PumpOnOrOff,CHANGE);
   ///testing relays for boiler and pump /// Boiler pin 27; Pump pin 26
-
-pinMode(PUMP_PIN, OUTPUT);
-pinMode(BOILER_PIN, OUTPUT);
+  pinMode(SW,INPUT_PULLUP);
+  pinMode(PUMP_PIN, OUTPUT);
+  pinMode(BOILER_PIN, OUTPUT);
 
 ///
 
@@ -80,8 +83,9 @@ pinMode(BOILER_PIN, OUTPUT);
 
 void loop() {
   
-   Serial.println(digitalRead(PUMP_SWITCH)); 
-    
+   Serial.print("SW"); Serial.println(digitalRead(SW));
+    Serial.print("boiler pin");  Serial.println(digitalRead(BOILER_PIN)); 
+   encoderButtonOnOff(); 
   ////
   display.clearDisplay();
   display.setTextSize(1.5);
@@ -90,20 +94,13 @@ void loop() {
   //TEMP
   DisplayTemp();
   //PRESSURE
-    display.print("PSI = "); display.println((int)((ad7830.readADCsingle(0)-41)*.6444444));
-   //SHOTTIMER
+  display.print("PSI = "); display.println((int)((ad7830.readADCsingle(0)-41)*.6444444));
+  //Start timer when pump starts
   StartTimer();
+  //Display the Time
   DisplayTime();
-  
   //SCALE
-  if(scale.is_ready())
-  {
-      display.print(scale.get_units(),1); display.println(F("g"));
-  }
-  else
-  {
-    display.println("ERROR");
-  }
+  DisplayScale();
   display.display();
   delay(1000);
 
@@ -141,7 +138,7 @@ void SetupScreen()
 void SetupEncoder()
 {
   ESP32Encoder::useInternalWeakPullResistors=UP;
-  encoder.attachHalfQuad(clk, dt);
+  encoder.attachHalfQuad(CLK, DT);
   encoder.clearCount();
 }
 
@@ -170,13 +167,25 @@ void DisplayTemp(){
 void DisplayTime()
 {
   display.print("Shot Time = ");
-  display.println((float)(ShotTimer));
+  display.println((double)(ShotTimer));
 
+}
+
+void DisplayScale()
+{
+if(scale.is_ready())
+  {
+      display.print(scale.get_units(),1); display.println(F("g"));
+  }
+  else
+  {
+    display.println("ERROR");
+  }
 }
 
 void StartTimer()
 { 
-  if(SwitchState == HIGH){
+  if(SwitchState == LOW){
     if(InitialVal == 0){InitialVal = micros();}
     ShotTimer = (micros() - InitialVal)/1000000.; 
   } else{
@@ -193,6 +202,12 @@ void PumpOnOrOff()
   }else{
    digitalWrite(PUMP_PIN, HIGH);
   }
+  }
   
- 
+void encoderButtonOnOff(){
+if(digitalRead(SW) == HIGH)
+{
+  digitalWrite(BOILER_PIN, LOW);
+  }else{digitalWrite(BOILER_PIN,HIGH);
+  }
 }
