@@ -7,22 +7,29 @@
 #include <Adafruit_ADS7830.h>
 #include <Bounce2.h>
 #include "EEPROM.h"
+#include "ArduPID.h"
+
+
+
 
 // Pump Switch Pin
 const int PUMP_SWITCH = 14; 
 int SwitchState = 1;
 
 //Encoder setup
+
 ESP32Encoder encoder;
 const int CLK = 25;
 const int DT = 33;
 const int SW = 32;
-int encoderButtonState = 0;
-
+int encoderButtonState;
+int encoderPosition;
+long oldPosition = 0;
+int menuPosition;
 
 // Instantiate eeprom to store temp variable so it remembers what the last temp was set at
 EEPROMClass  TEMPS("eeprom0");
-int SetTemp = 100; // tempurature that the water should heat up to
+double setTemp = 100; // tempurature that the water should heat up to
 
 // Use software SPI: CS, DI, DO, CLK
 Adafruit_MAX31865 thermo = Adafruit_MAX31865(15, 2, 4, 16);
@@ -31,17 +38,23 @@ Adafruit_MAX31865 thermo = Adafruit_MAX31865(15, 2, 4, 16);
 // The value of the Rref resistor. Use 430.0 for PT100 and 4300.0 for PT1000
 // The 'nominal' 0-degrees-C resistance of the sensor
 // 100.0 for PT100, 1000.0 for PT1000
+
 //TEMP
 const int RREF = 430.0;
 const int RNOMINAL = 100.0;
+double BOILER_TEMP;
 
 //PRESSURE
 Adafruit_ADS7830 ad7830;
+int BOILER_PRESSURE;
 
 //WEIGHT
 // HX711 circuit wiring
 const int LOADCELL_DOUT_PIN = 19;
 const int LOADCELL_SCK_PIN = 18;
+int currentWeight;
+int scaleSetWeight;
+int scaleOffset;
 
 //SCREEN
 const int SCREEN_WIDTH = 128;  // OLED display width, in pixels
@@ -51,16 +64,27 @@ Adafruit_SH1107 display = Adafruit_SH1107(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OL
 HX711 scale;
 
 //Timer
-double ShotTimer = 0.0;
-double InitialVal = 0;
+double ShotTimer;
+double InitialVal;
 
 //Boiler
-
 const int BOILER_PIN = 27;
 
 //Pump
-
 const int PUMP_PIN = 26;
+
+//PID
+ArduPID myController;
+double input;
+double output;
+
+// Arbitrary setpoint and gains - adjust these as fit for your project:
+double setpoint = 170;
+double p = 5;
+double i = 1;
+double d = 0.5;
+//
+
 
 
 void setup() {
@@ -72,39 +96,85 @@ void setup() {
   //Set the group head switch 
   pinMode(PUMP_SWITCH, INPUT_PULLUP); 
   attachInterrupt(digitalPinToInterrupt(PUMP_SWITCH),PumpOnOrOff,CHANGE);
-  ///testing relays for boiler and pump /// Boiler pin 27; Pump pin 26
-  pinMode(SW,INPUT_PULLUP);
+  ///Rotary Encoder Button
+  pinMode(SW,INPUT_PULLUP);  
+  /// Relays for boiler and pump /// Boiler pin 27; Pump pin 26
   pinMode(PUMP_PIN, OUTPUT);
   pinMode(BOILER_PIN, OUTPUT);
-
-///
-
+  ///PID setup
+  myController.begin(&input, &output, &setpoint, p, i, d);
+  myController.setSampleTime(10);      // OPTIONAL - will ensure at least 10ms have past between successful compute() calls
+  myController.setOutputLimits(0, 255);
+  myController.setBias(255.0 / 2.0);
+  myController.setWindUpLimits(-10, 10); // Groth bounds for the integral term to prevent integral wind-up
+  myController.start();
 }
 
 void loop() {
   
-   Serial.print("SW"); Serial.println(digitalRead(SW));
-    Serial.print("boiler pin");  Serial.println(digitalRead(BOILER_PIN)); 
-   encoderButtonOnOff(); 
-  ////
+  
+  ////PID Boiler control test
+  input = BOILER_TEMP; // 
+  myController.compute();
+ // myController.debug(&Serial, "myController", PRINT_INPUT    | // Can include or comment out any of these terms to print
+//                                              PRINT_OUTPUT   | // in the Serial plotter
+//                                              PRINT_SETPOINT |
+//                                              PRINT_BIAS     |
+//                                              PRINT_P        |
+//                                              PRINT_I        |
+//                                              PRINT_D);
+  
+  
+  // turns Boiler on or off based on output of PID
+  analogWrite(BOILER_PIN, output); 
+
+  //read Boiler pressure
+  BOILER_PRESSURE = (ad7830.readADCsingle(0)-41)*.6444444;
+  
+  //READ temps
+  BOILER_TEMP = (thermo.temperature(RNOMINAL, RREF) * (9./5.)) + 32.;
+  uint16_t rtd = thermo.readRTD();
+  double ratio = rtd;
+  ratio /= 32768;
+    //uint8_t fault = thermo.readFault();
+  //Start timer when pump starts
+  StartTimer();
+  //Scroll through menu
+  EncoderScroll();
+//screen stuff  
+ if(menuPosition == 1){
+   display.clearDisplay();
+  display.setTextSize(1.5);
+  display.setTextColor(SH110X_WHITE);
+  display.setCursor(0, 10);  
+  DisplayTemp();
+  display.display();
+  delay(1000);
+  
+ } else{
   display.clearDisplay();
   display.setTextSize(1.5);
   display.setTextColor(SH110X_WHITE);
   display.setCursor(0, 10);     // Start at top-left corner
-  //TEMP
   DisplayTemp();
-  //PRESSURE
-  display.print("PSI = "); display.println((int)((ad7830.readADCsingle(0)-41)*.6444444));
-  //Start timer when pump starts
-  StartTimer();
-  //Display the Time
   DisplayTime();
-  //SCALE
+  DisplayPressure();
   DisplayScale();
   display.display();
   delay(1000);
+  }
+   
+
+///Menus    1st menu = data, 2nd menu= variables; variables include: Temp, High pressure shut off, PID variables, Shot timer set, weight set,  
 
  
+
+
+
+
+
+
+
 
 
 }
@@ -137,9 +207,13 @@ void SetupScreen()
 
 void SetupEncoder()
 {
+  
   ESP32Encoder::useInternalWeakPullResistors=UP;
-  encoder.attachHalfQuad(CLK, DT);
+  encoder.attachSingleEdge(CLK, DT);
+  //encoder.attachHalfQuad(CLK, DT);
   encoder.clearCount();
+  encoder.setFilter(1023);
+
 }
 
 void SetupSensors()
@@ -154,15 +228,18 @@ void SetupSensors()
 }
 
 void DisplayTemp(){
-   //read from sensors
-  uint16_t rtd = thermo.readRTD();
-  float ratio = rtd;
-  ratio /= 32768;
-  //uint8_t fault = thermo.readFault();
+  
   display.print("Temp = ");
-  display.print((float)((thermo.temperature(RNOMINAL, RREF) * (9./5.)) + 32.));
+  display.print((double)(BOILER_TEMP));
   display.println(F(" F"));
 }
+
+
+void DisplayPressure(){
+  display.print("PSI = "); display.println((int)(BOILER_PRESSURE));
+  
+}
+
 
 void DisplayTime()
 {
@@ -175,7 +252,8 @@ void DisplayScale()
 {
 if(scale.is_ready())
   {
-      display.print(scale.get_units(),1); display.println(F("g"));
+      currentWeight = scale.get_units(),1;
+      display.print(currentWeight); display.println(F("g"));
   }
   else
   {
@@ -183,17 +261,20 @@ if(scale.is_ready())
   }
 }
 
+////Starts timer when pump turns on
 void StartTimer()
 { 
   if(SwitchState == LOW){
     if(InitialVal == 0){InitialVal = micros();}
     ShotTimer = (micros() - InitialVal)/1000000.; 
   } else{
+    delay(1000);///delay to show shottimer for a moment
     InitialVal = 0;
     ShotTimer = 0; 
   }
 }
 
+////Turns pump on or off using lever on front
 void PumpOnOrOff()
 {
   SwitchState = digitalRead(PUMP_SWITCH);
@@ -203,11 +284,22 @@ void PumpOnOrOff()
    digitalWrite(PUMP_PIN, HIGH);
   }
   }
-  
-void encoderButtonOnOff(){
-if(digitalRead(SW) == HIGH)
-{
-  digitalWrite(BOILER_PIN, LOW);
-  }else{digitalWrite(BOILER_PIN,HIGH);
+
+//Turns Off Pump when Weight is achieved
+void ScaleShutOff(){
+  if(currentWeight == (scaleSetWeight + scaleOffset) || currentWeight > (scaleSetWeight + scaleOffset))
+  {
+    digitalWrite(PUMP_PIN, HIGH);
   }
+}
+
+
+////Encoder test
+void EncoderScroll(){
+  int numOfMenuItems = 1;
+  long newPosition = encoder.getCount();
+  if (newPosition != oldPosition) {
+    if(menuPosition == numOfMenuItems){menuPosition = 0;}else{menuPosition++;}
+  }
+  oldPosition = newPosition;
 }
