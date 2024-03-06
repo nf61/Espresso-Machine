@@ -22,9 +22,13 @@ ESP32Encoder encoder;
 const int CLK = 25;
 const int DT = 33;
 const int SW = 32;
-int encoderButtonState;
-int encoderPosition;
-long oldPosition = 0;
+//int encoderButtonState;
+double inter;
+//Main menu varis
+int mainMenuPosition;
+const int numOfMenuItems = 2;
+ 
+//sub-menu scroll varis
 int menuPosition;
 
 // Instantiate eeprom to store temp variable so it remembers what the last temp was set at
@@ -64,6 +68,7 @@ Adafruit_SH1107 display = Adafruit_SH1107(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OL
 HX711 scale;
 
 //Timer
+int ShotTimerSet;
 double ShotTimer;
 double InitialVal;
 
@@ -78,8 +83,8 @@ ArduPID myController;
 double input;
 double output;
 
-// Arbitrary setpoint and gains - adjust these as fit for your project:
-double setpoint = 170;
+// Arbitrary setPoint and gains - adjust these as fit for your project:
+double setPoint = 170;
 double p = 5;
 double i = 1;
 double d = 0.5;
@@ -98,11 +103,12 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PUMP_SWITCH),PumpOnOrOff,CHANGE);
   ///Rotary Encoder Button
   pinMode(SW,INPUT_PULLUP);  
+  attachInterrupt(digitalPinToInterrupt(SW),EncoderButton,RISING);
   /// Relays for boiler and pump /// Boiler pin 27; Pump pin 26
   pinMode(PUMP_PIN, OUTPUT);
   pinMode(BOILER_PIN, OUTPUT);
   ///PID setup
-  myController.begin(&input, &output, &setpoint, p, i, d);
+  myController.begin(&input, &output, &setPoint, p, i, d);
   myController.setSampleTime(10);      // OPTIONAL - will ensure at least 10ms have past between successful compute() calls
   myController.setOutputLimits(0, 255);
   myController.setBias(255.0 / 2.0);
@@ -116,14 +122,6 @@ void loop() {
   ////PID Boiler control test
   input = BOILER_TEMP; // 
   myController.compute();
- // myController.debug(&Serial, "myController", PRINT_INPUT    | // Can include or comment out any of these terms to print
-//                                              PRINT_OUTPUT   | // in the Serial plotter
-//                                              PRINT_SETPOINT |
-//                                              PRINT_BIAS     |
-//                                              PRINT_P        |
-//                                              PRINT_I        |
-//                                              PRINT_D);
-  
   
   // turns Boiler on or off based on output of PID
   analogWrite(BOILER_PIN, output); 
@@ -139,19 +137,9 @@ void loop() {
     //uint8_t fault = thermo.readFault();
   //Start timer when pump starts
   StartTimer();
-  //Scroll through menu
-  EncoderScroll();
+ 
 //screen stuff  
- if(menuPosition == 1){
-   display.clearDisplay();
-  display.setTextSize(1.5);
-  display.setTextColor(SH110X_WHITE);
-  display.setCursor(0, 10);  
-  DisplayTemp();
-  display.display();
-  delay(1000);
-  
- } else{
+ if(mainMenuPosition == 0){
   display.clearDisplay();
   display.setTextSize(1.5);
   display.setTextColor(SH110X_WHITE);
@@ -161,22 +149,34 @@ void loop() {
   DisplayPressure();
   DisplayScale();
   display.display();
-  delay(1000);
+  delay(100);
   }
-   
-
-///Menus    1st menu = data, 2nd menu= variables; variables include: Temp, High pressure shut off, PID variables, Shot timer set, weight set,  
-
+ if(mainMenuPosition == 1 || mainMenuPosition == 2){
+  if(mainMenuPosition == 1){
+  menuPosition = encoder.getCount()/2;
+  if(menuPosition > 5){encoder.setCount(0);}if(menuPosition < 0){encoder.setCount(10);}  
+  }
+  display.clearDisplay();
+  display.setTextSize(1.5);
+  display.setTextColor(SH110X_WHITE);
+  display.setCursor(0, 10);  
+  if(menuPosition == 0){display.print(">");}display.print("Back");
+  display.println(" ");
+  EncoderVariSet(1, "ShotTimer Set = ", ShotTimer, 0.1);
+  EncoderVariSet(2, "Temp Set = ", setPoint, 1);
+  EncoderVariSet(3, "P = ", p, 0.1);
+  EncoderVariSet(4, "I = ", i, 0.1);
+  
+  //EncoderVariSet(5, "D = ", d, 0.1);
+  if(menuPosition == 5){display.print(">"); 
+  if(mainMenuPosition == 2 && menuPosition == 5){display.print("> ");
+    d = 0.1 * (encoder.getCount()/2);
+    }}
+  display.print("D = ");display.println(d);
+  display.display();
+  delay(100);
+  } 
  
-
-
-
-
-
-
-
-
-
 }
 
 void SetupScreen()
@@ -209,8 +209,8 @@ void SetupEncoder()
 {
   
   ESP32Encoder::useInternalWeakPullResistors=UP;
-  encoder.attachSingleEdge(CLK, DT);
-  //encoder.attachHalfQuad(CLK, DT);
+  //encoder.attachSingleEdge(CLK, DT);
+  encoder.attachHalfQuad(CLK, DT);
   encoder.clearCount();
   encoder.setFilter(1023);
 
@@ -265,12 +265,13 @@ if(scale.is_ready())
 void StartTimer()
 { 
   if(SwitchState == LOW){
+    ShotTimer = 0;
     if(InitialVal == 0){InitialVal = micros();}
     ShotTimer = (micros() - InitialVal)/1000000.; 
   } else{
     delay(1000);///delay to show shottimer for a moment
     InitialVal = 0;
-    ShotTimer = 0; 
+     
   }
 }
 
@@ -294,12 +295,30 @@ void ScaleShutOff(){
 }
 
 
-////Encoder test
-void EncoderScroll(){
-  int numOfMenuItems = 1;
-  long newPosition = encoder.getCount();
-  if (newPosition != oldPosition) {
-    if(menuPosition == numOfMenuItems){menuPosition = 0;}else{menuPosition++;}
+///Encoder Button
+void EncoderButton(){
+ 
+  //if(mainMenuPosition == 1 and menuPosition > 0){}
+    //else{
+      if(mainMenuPosition == numOfMenuItems){mainMenuPosition = 0;}else{mainMenuPosition++;}
+      //}
   }
-  oldPosition = newPosition;
+ ////creates the arrow in the menu, and allows variable to be set on the screen
+void EncoderVariSet(int mPosition, String variName, double vari, double multi ){
+  if(menuPosition == mPosition){display.print(">"); 
+  if(mainMenuPosition == 2 && menuPosition == mPosition){
+    display.print("> ");
+    vari = multi * (encoder.getCount()/2);
+    }}
+  display.print(variName);display.println(vari);
 }
+
+
+////Encoder scroll through menu, items are number of menu items and vari is the the variable that you are trying to change 
+void EncoderScroll(int items, double varis){
+  varis = encoder.getCount()/2;
+  if(varis > items){encoder.setCount(0);}if(varis < 0){encoder.setCount(10);}
+  //if (menuPosition > numOfMenuItems) {menuPosition = 0;} if (menuPosition < 0) {menuPosition = numOfMenuItems;} else{menuPosition = encoder.getCount()/2;}
+    //}
+  }
+  
